@@ -43,6 +43,18 @@ header{display:flex;align-items:center;justify-content:space-between;flex-wrap:w
 .logo-icon{font-size:2.4rem}
 .logo-text{font-size:1.5rem;font-weight:700;letter-spacing:-0.02em}
 .logo-sub{font-size:0.72rem;color:var(--text-dim);margin-top:2px}
+.family-photo{
+  width:52px;height:52px;
+  border-radius:50%;
+  object-fit:cover;
+  border:2.5px solid rgba(255,255,255,0.4);
+  box-shadow:0 2px 16px rgba(0,0,0,0.4);
+  margin-left:4px;
+  flex-shrink:0;
+  transition:transform 0.3s,box-shadow 0.3s;
+}
+.family-photo:hover{transform:scale(1.08);box-shadow:0 4px 24px rgba(100,181,246,0.5);}
+@media(max-width:640px){.family-photo{width:42px;height:42px;}}
 
 /* SEARCH */
 .search-wrap{position:relative;flex:1;max-width:480px;min-width:0}
@@ -54,7 +66,7 @@ header{display:flex;align-items:center;justify-content:space-between;flex-wrap:w
   border-radius:50px;
   color:var(--text);
   font-family:var(--font);
-  font-size:0.95rem;
+  font-size:16px; /* iOS 자동 확대 방지: 반드시 16px 이상 */
   outline:none;
   transition:all 0.3s;
 }
@@ -282,6 +294,7 @@ footer a:hover{text-decoration:underline}
         <div class="logo-text">스마트 날씨</div>
         <div class="logo-sub">4개 기상 모델 실시간 종합 예보</div>
       </div>
+      <img class="family-photo" src="family.jpg" alt="우리 가족" onerror="this.style.display='none'">
     </div>
     <div class="search-wrap">
       <div class="search-row">
@@ -454,49 +467,62 @@ function formatDayLabel(dateStr, idx) {
 }
 
 // ─── API ─────────────────────────────────────────────────────────
+// Nominatim 결과를 공통 포맷으로 변환 (학교·건물 등 제외하고 행정구역/지역만)
+function parseNominatim(data, defaultCountry, defaultCC) {
+  const seen = new Set();
+  return data
+    .filter(item => item.class === 'boundary' || item.class === 'place')
+    .filter(item => {
+      const key = (item.name || item.display_name.split(',')[0]).trim();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map(item => {
+      const addr  = item.address || {};
+      const parts = item.display_name.split(',').map(s => s.trim());
+      const cc    = (addr.country_code || defaultCC || '').toUpperCase();
+      return {
+        name:         item.name || parts[0],
+        admin1:       addr.province || addr.state || addr.city || addr.county || parts[1] || '',
+        country:      addr.country  || defaultCountry || parts[parts.length - 1] || '',
+        country_code: cc,
+        latitude:     parseFloat(item.lat),
+        longitude:    parseFloat(item.lon),
+        population:   0,
+      };
+    });
+}
+
+async function nominatimSearch(q, countrycodes) {
+  const cc  = countrycodes ? `&countrycodes=${countrycodes}` : '';
+  const url = `https://nominatim.openstreetmap.org/search` +
+              `?q=${encodeURIComponent(q)}&format=jsonv2${cc}` +
+              `&limit=12&accept-language=ko&addressdetails=1`;
+  const r   = await fetch(url);
+  return r.json();
+}
+
 async function geocode(q) {
   const isKorean = /[가-힣ᄀ-ᇿ㄰-㆏]/.test(q);
 
   if (isKorean) {
-    // 한글 검색 → Nominatim(OSM)으로 대한민국만 조회 → 정확한 한국어 지명 보장
+    // 1차: 대한민국 행정구역·지역 검색
     try {
-      const url = `https://nominatim.openstreetmap.org/search` +
-        `?q=${encodeURIComponent(q)}&format=jsonv2&countrycodes=kr` +
-        `&limit=8&accept-language=ko&addressdetails=1`;
-      const r    = await fetch(url);
-      const data = await r.json();
-      if (data.length > 0) {
-        // 중복 지명 제거 후 변환
-        const seen = new Set();
-        return data
-          .filter(item => {
-            const key = (item.name || item.display_name.split(',')[0]).trim();
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          })
-          .map(item => {
-            const addr   = item.address || {};
-            const parts  = item.display_name.split(',').map(s => s.trim());
-            const admin1 = addr.province || addr.state ||
-                           addr.city    || addr.county || parts[1] || '';
-            return {
-              name:         item.name || parts[0],
-              admin1,
-              country:      '대한민국',
-              country_code: 'KR',
-              latitude:     parseFloat(item.lat),
-              longitude:    parseFloat(item.lon),
-              population:   0,
-            };
-          });
-      }
-    } catch (e) {
-      console.warn('Nominatim 실패, Open-Meteo로 대체:', e);
-    }
+      const data    = await nominatimSearch(q, 'kr');
+      const results = parseNominatim(data, '대한민국', 'KR');
+      if (results.length > 0) return results;
+    } catch (e) { console.warn('Nominatim KR 실패:', e); }
+
+    // 2차: 한국어로 쓴 외국 지명 검색 (뉴욕, 도쿄 등) — 북한 제외
+    try {
+      const data    = await nominatimSearch(q, '');
+      const results = parseNominatim(data).filter(r => r.country_code !== 'KP');
+      if (results.length > 0) return results;
+    } catch (e) { console.warn('Nominatim 전세계 실패:', e); }
   }
 
-  // 영문 검색 또는 한글 fallback → Open-Meteo (북한 KP 완전 제외, 한국 KR 우선)
+  // 영문 검색 또는 최종 fallback → Open-Meteo (북한 제외, 한국 우선)
   const r = await fetch(
     `${GEOCODING}?name=${encodeURIComponent(q)}&count=15&language=ko&format=json`
   );
