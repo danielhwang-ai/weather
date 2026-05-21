@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>스마트 날씨 — 다중 기상 소스 종합 예보</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+:root{
+  --glass:rgba(255,255,255,0.08);
+  --glass-h:rgba(255,255,255,0.14);
+  --border:rgba(255,255,255,0.18);
+  --text:#e8f4fd;
+  --text-dim:rgba(232,244,253,0.6);
+  --accent:#64b5f6;
+  --shadow:0 8px 32px rgba(0,0,0,0.4);
+  --radius:20px;
+  --font:'Noto Sans KR',sans-serif;
+}
+body{
+  font-family:var(--font);
+  min-height:100vh;
+  background:linear-gradient(160deg,#0c1445,#0d47a1,#1565c0);
+  color:var(--text);
+  transition:background 1.5s ease;
+  overflow-x:hidden;
+}
+.bg-blobs{position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:0}
+.blob{position:absolute;border-radius:50%;filter:blur(80px);opacity:0.12;animation:blobFloat 20s ease-in-out infinite}
+.blob:nth-child(1){width:600px;height:600px;background:#1e88e5;top:-150px;left:-150px;animation-delay:0s}
+.blob:nth-child(2){width:450px;height:450px;background:#7b1fa2;bottom:-150px;right:-150px;animation-delay:-7s}
+.blob:nth-child(3){width:350px;height:350px;background:#00acc1;top:40%;left:40%;animation-delay:-14s}
+@keyframes blobFloat{0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(40px,-40px) scale(1.06)}66%{transform:translate(-30px,30px) scale(0.94)}}
+
+.app{position:relative;z-index:1;max-width:1200px;margin:0 auto;padding:24px 16px 60px}
+
+/* HEADER */
+header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:32px}
+.logo{display:flex;align-items:center;gap:12px}
+.logo-icon{font-size:2.4rem}
+.logo-text{font-size:1.5rem;font-weight:700;letter-spacing:-0.02em}
+.logo-sub{font-size:0.72rem;color:var(--text-dim);margin-top:2px}
+
+/* SEARCH */
+.search-wrap{position:relative;flex:1;max-width:480px}
+.search-row{display:flex;gap:8px}
+.search-input{
+  flex:1;padding:13px 20px;
+  background:var(--glass);
+  border:1px solid var(--border);
+  border-radius:50px;
+  color:var(--text);
+  font-family:var(--font);
+  font-size:0.95rem;
+  outline:none;
+  transition:all 0.3s;
+}
+.search-input::placeholder{color:var(--text-dim)}
+.search-input:focus{background:var(--glass-h);border-color:var(--accent);box-shadow:0 0 0 3px rgba(100,181,246,0.2)}
+.search-btn{
+  padding:13px 20px;
+  background:linear-gradient(135deg,#1565c0,#42a5f5);
+  border:none;border-radius:50px;
+  color:#fff;cursor:pointer;
+  font-size:0.9rem;font-family:var(--font);
+  transition:all 0.3s;white-space:nowrap;
+}
+.search-btn:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(100,181,246,0.4)}
+.search-results{
+  position:absolute;top:calc(100% + 8px);left:0;right:0;
+  background:rgba(8,12,40,0.96);
+  backdrop-filter:blur(20px);
+  border:1px solid var(--border);
+  border-radius:16px;
+  overflow:hidden;
+  z-index:200;
+  display:none;
+  box-shadow:var(--shadow);
+}
+.search-results.show{display:block}
+.s-item{padding:12px 18px;cursor:pointer;transition:background 0.2s;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(255,255,255,0.06)}
+.s-item:last-child{border-bottom:none}
+.s-item:hover{background:var(--glass-h)}
+.s-city{font-weight:500;font-size:0.9rem}
+.s-country{font-size:0.75rem;color:var(--text-dim);margin-top:2px}
+
+/* GLASS CARD */
+.card{
+  background:var(--glass);
+  backdrop-filter:blur(20px);
+  -webkit-backdrop-filter:blur(20px);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+}
+
+/* MAIN GRID */
+.main-grid{display:grid;grid-template-columns:1.2fr 1fr;gap:20px;margin-bottom:20px}
+@media(max-width:768px){.main-grid{grid-template-columns:1fr}}
+
+/* CURRENT WEATHER */
+.current-card{padding:32px}
+.loc-row{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.loc-name{font-size:1.25rem;font-weight:700}
+.loc-date{font-size:0.82rem;color:var(--text-dim);margin-bottom:24px}
+.temp-row{display:flex;align-items:flex-start;gap:20px;margin-bottom:24px}
+.w-emoji{font-size:5rem;line-height:1;filter:drop-shadow(0 4px 12px rgba(0,0,0,0.4))}
+.main-temp{font-size:5rem;font-weight:200;line-height:1}
+.w-desc{font-size:1.05rem;color:var(--text-dim);margin-top:6px}
+.feels{font-size:0.85rem;color:var(--text-dim);margin-top:4px}
+.w-stats{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.stat{display:flex;align-items:center;gap:8px}
+.stat-icon{font-size:1rem;min-width:22px;text-align:center}
+.stat-val{font-size:0.88rem;font-weight:500}
+.stat-lbl{font-size:0.72rem;color:var(--text-dim)}
+
+/* TODAY CARD */
+.today-card{padding:28px}
+.card-title{font-size:0.78rem;font-weight:600;color:var(--text-dim);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:18px}
+.today-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media(max-width:500px){.today-grid{grid-template-columns:repeat(2,1fr)}}
+.t-stat{text-align:center;padding:13px 8px;background:rgba(255,255,255,0.05);border-radius:14px}
+.t-val{font-size:1.25rem;font-weight:700}
+.t-lbl{font-size:0.68rem;color:var(--text-dim);margin-top:4px}
+.aq-grade{display:inline-block;font-size:0.65rem;font-weight:700;padding:2px 8px;border-radius:20px;margin-top:5px;letter-spacing:0.03em}
+
+/* SOURCES */
+.section-hd{display:flex;align-items:center;gap:10px;margin-bottom:14px;margin-top:8px}
+.section-title{font-size:0.95rem;font-weight:600}
+.sources-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
+@media(max-width:640px){.sources-row{grid-template-columns:repeat(2,1fr)}}
+.src-card{padding:18px 12px;text-align:center;border-radius:16px;transition:transform 0.25s}
+.src-card:hover{transform:translateY(-4px)}
+.src-flag{font-size:1.6rem}
+.src-name{font-size:0.72rem;color:var(--text-dim);margin-top:4px;font-weight:500}
+.src-emoji{font-size:1.5rem;margin:8px 0}
+.src-max{font-size:1.5rem;font-weight:700}
+.src-min{font-size:0.85rem;color:var(--text-dim);margin-top:2px}
+.src-tag{display:inline-block;font-size:0.62rem;padding:2px 8px;border-radius:20px;margin-top:8px;font-weight:600}
+.src-na{font-size:0.8rem;color:var(--text-dim);margin-top:20px}
+
+/* WEEK GRID */
+.week-row{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;margin-bottom:20px}
+@media(max-width:900px){.week-row{grid-template-columns:repeat(4,1fr)}}
+@media(max-width:480px){.week-row{grid-template-columns:repeat(2,1fr)}}
+.day-card{
+  padding:16px 8px;text-align:center;cursor:pointer;
+  border-radius:16px;border:1px solid var(--border);
+  background:var(--glass);
+  transition:all 0.3s;
+  backdrop-filter:blur(20px);
+}
+.day-card:hover{transform:translateY(-5px);background:var(--glass-h)}
+.day-card.active{
+  transform:translateY(-5px);
+  background:linear-gradient(135deg,rgba(100,181,246,0.22),rgba(66,165,245,0.12));
+  border-color:var(--accent);
+  box-shadow:0 0 20px rgba(100,181,246,0.2);
+}
+.d-name{font-size:0.78rem;font-weight:600;color:var(--text-dim)}
+.d-date{font-size:0.68rem;color:var(--text-dim);margin-bottom:10px;margin-top:2px}
+.d-emoji{font-size:2rem;display:block;margin-bottom:8px}
+.d-temps{display:flex;gap:6px;justify-content:center;align-items:baseline}
+.d-max{font-size:1rem;font-weight:700}
+.d-min{font-size:0.8rem;color:var(--text-dim)}
+.d-rain{font-size:0.68rem;color:#64b5f6;margin-top:6px;min-height:16px}
+
+/* DETAIL PANEL */
+.detail-panel{
+  overflow:hidden;
+  max-height:0;
+  opacity:0;
+  transition:max-height 0.5s cubic-bezier(0.4,0,0.2,1),opacity 0.4s ease;
+  margin-bottom:0;
+  border-radius:var(--radius);
+}
+.detail-panel.open{max-height:700px;opacity:1;margin-bottom:24px}
+.detail-inner{padding:28px}
+.detail-title{font-size:1.05rem;font-weight:700;margin-bottom:20px}
+
+.hourly-scroll{overflow-x:auto;padding-bottom:8px;margin-bottom:24px}
+.hourly-scroll::-webkit-scrollbar{height:4px}
+.hourly-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.2);border-radius:2px}
+.hourly-track{display:flex;gap:8px;min-width:max-content}
+.h-item{
+  text-align:center;padding:12px 10px;min-width:68px;
+  background:rgba(255,255,255,0.05);border-radius:12px;
+  flex-shrink:0;border:1px solid rgba(255,255,255,0.08);
+  transition:background 0.2s;
+}
+.h-item:hover{background:rgba(255,255,255,0.1)}
+.h-item.now{background:rgba(100,181,246,0.18);border-color:rgba(100,181,246,0.55);box-shadow:0 0 14px rgba(100,181,246,0.22)}
+.h-past{opacity:0.38}
+.h-time{font-size:0.68rem;color:var(--text-dim)}
+.h-emoji{font-size:1.4rem;display:block;margin:8px 0}
+.h-temp{font-size:0.95rem;font-weight:600}
+.h-rain{font-size:0.65rem;color:#64b5f6;margin-top:4px;min-height:14px}
+.h-wind{font-size:0.65rem;color:var(--text-dim);margin-top:2px}
+
+.bars-section{margin-top:4px}
+.bars-title{font-size:0.8rem;color:var(--text-dim);margin-bottom:14px}
+.bar-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.bar-lbl{font-size:0.72rem;color:var(--text-dim);min-width:48px}
+.bar-bg{flex:1;height:8px;background:rgba(255,255,255,0.08);border-radius:4px;overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;transition:width 1s ease}
+.bar-val{font-size:0.72rem;min-width:40px;text-align:right}
+
+/* LOADING / ERROR */
+.loading{display:none;flex-direction:column;align-items:center;justify-content:center;padding:80px;gap:20px}
+.loading.show{display:flex}
+.spinner{width:48px;height:48px;border:4px solid rgba(255,255,255,0.1);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.load-txt{color:var(--text-dim);font-size:0.9rem}
+.error-box{display:none;padding:24px;text-align:center;color:#ef9a9a;font-size:0.9rem}
+.error-box.show{display:block}
+
+/* FOOTER */
+footer{text-align:center;margin-top:40px;font-size:0.75rem;color:var(--text-dim);line-height:1.8}
+footer a{color:var(--accent);text-decoration:none}
+footer a:hover{text-decoration:underline}
+.src-links{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:10px}
+.src-link{display:flex;align-items:center;gap:6px;padding:6px 14px;background:var(--glass);border:1px solid var(--border);border-radius:50px;font-size:0.75rem;color:var(--text-dim);text-decoration:none;transition:all 0.2s}
+.src-link:hover{background:var(--glass-h);color:var(--text)}
+
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.18);border-radius:3px}
+</style>
+</head>
+<body>
+
+<div class="bg-blobs">
+  <div class="blob"></div>
+  <div class="blob"></div>
+  <div class="blob"></div>
+</div>
+
+<div class="app">
+  <header>
+    <div class="logo">
+      <div class="logo-icon">🌤️</div>
+      <div>
+        <div class="logo-text">스마트 날씨</div>
+        <div class="logo-sub">4개 기상 모델 실시간 종합 예보</div>
+      </div>
+    </div>
+    <div class="search-wrap">
+      <div class="search-row">
+        <input type="text" class="search-input" id="searchInput" placeholder="도시 검색 (한글/영어)..." autocomplete="off">
+        <button class="search-btn" id="searchBtn">🔍 검색</button>
+      </div>
+      <div class="search-results" id="searchResults"></div>
+    </div>
+  </header>
+
+  <div class="loading" id="loadingDiv">
+    <div class="spinner"></div>
+    <div class="load-txt">날씨 정보를 불러오는 중...</div>
+  </div>
+  <div class="error-box" id="errorBox"></div>
+
+  <div id="weatherContent" style="display:none">
+    <div class="main-grid">
+      <div class="card current-card" id="currentCard">
+        <div class="loc-row">
+          <span>📍</span>
+          <span class="loc-name" id="locName">-</span>
+        </div>
+        <div class="loc-date" id="locDate">-</div>
+        <div class="temp-row">
+          <div class="w-emoji" id="wEmoji">-</div>
+          <div>
+            <div class="main-temp" id="mainTemp">-</div>
+            <div class="w-desc" id="wDesc">-</div>
+            <div class="feels" id="wFeels">-</div>
+          </div>
+        </div>
+        <div class="w-stats" id="wStats"></div>
+      </div>
+
+      <div class="card today-card">
+        <div class="card-title">오늘 상세 정보</div>
+        <div class="today-grid" id="todayGrid"></div>
+      </div>
+    </div>
+
+    <div class="section-hd"><span>🕐</span><span class="section-title">오늘 시간대별 예보</span></div>
+    <div class="card" style="padding:20px 24px 14px;margin-bottom:20px">
+      <div class="hourly-scroll" id="todayHScroll">
+        <div class="hourly-track" id="todayHTrack"></div>
+      </div>
+    </div>
+
+    <div class="section-hd"><span>📡</span><span class="section-title">기상 모델별 오늘 예보 비교</span></div>
+    <div class="sources-row" id="sourcesRow"></div>
+
+    <div class="section-hd"><span>📅</span><span class="section-title">이번 주 날씨 예보</span></div>
+    <div class="week-row" id="weekRow"></div>
+
+    <div class="detail-panel card" id="detailPanel">
+      <div class="detail-inner">
+        <div class="detail-title" id="detailTitle"></div>
+        <div class="hourly-scroll">
+          <div class="hourly-track" id="hourlyTrack"></div>
+        </div>
+        <div class="bars-section">
+          <div class="bars-title">⏱ 시간대별 기온 변화</div>
+          <div id="tempBars"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div>데이터 제공: Open-Meteo (기상청 KMA · ECMWF · GFS · JMA 모델 통합)</div>
+    <div class="src-links">
+      <a class="src-link" href="https://weather.go.kr" target="_blank">🇰🇷 기상청</a>
+      <a class="src-link" href="https://kweather.co.kr" target="_blank">🇰🇷 케이웨더</a>
+      <a class="src-link" href="https://weather.naver.com" target="_blank">🇰🇷 네이버 날씨</a>
+      <a class="src-link" href="https://www.accuweather.com" target="_blank">🌐 AccuWeather</a>
+      <a class="src-link" href="https://open-meteo.com" target="_blank">🌐 Open-Meteo</a>
+    </div>
+  </footer>
+</div>
+
+<script>
+const GEOCODING  = 'https://geocoding-api.open-meteo.com/v1/search';
+const WEATHER    = 'https://api.open-meteo.com/v1/forecast';
+const AIR_QUALITY = 'https://air-quality-api.open-meteo.com/v1/air-quality';
+
+const MODELS = [
+  { id: null,            name: '기상청 권장 모델', flag: '🇰🇷', color: '#1565c0', tag: '국내 최적' },
+  { id: 'jma_seamless',  name: '일본기상청 JMA',   flag: '🇯🇵', color: '#c62828', tag: '동아시아' },
+  { id: 'ecmwf_ifs025',  name: 'ECMWF 유럽',       flag: '🇪🇺', color: '#2e7d32', tag: '국제' },
+  { id: 'gfs_seamless',  name: 'GFS 미국',          flag: '🇺🇸', color: '#e65100', tag: '국제' },
+];
+
+const WMO_MAP = {
+  0:{ko:'맑음',emoji:'☀️'},1:{ko:'대체로 맑음',emoji:'🌤️'},
+  2:{ko:'구름 조금',emoji:'⛅'},3:{ko:'흐림',emoji:'☁️'},
+  45:{ko:'안개',emoji:'🌫️'},48:{ko:'짙은 안개',emoji:'🌫️'},
+  51:{ko:'이슬비',emoji:'🌦️'},53:{ko:'이슬비',emoji:'🌦️'},55:{ko:'강한 이슬비',emoji:'🌧️'},
+  56:{ko:'어는 이슬비',emoji:'🌧️'},57:{ko:'강한 어는 이슬비',emoji:'🌧️'},
+  61:{ko:'약한 비',emoji:'🌧️'},63:{ko:'비',emoji:'🌧️'},65:{ko:'강한 비',emoji:'🌧️'},
+  66:{ko:'어는 비',emoji:'🌧️'},67:{ko:'강한 어는 비',emoji:'🌧️'},
+  71:{ko:'약한 눈',emoji:'🌨️'},73:{ko:'눈',emoji:'❄️'},75:{ko:'강한 눈',emoji:'❄️'},
+  77:{ko:'눈발',emoji:'🌨️'},
+  80:{ko:'소나기',emoji:'🌦️'},81:{ko:'소나기',emoji:'🌧️'},82:{ko:'강한 소나기',emoji:'🌧️'},
+  85:{ko:'눈 소나기',emoji:'🌨️'},86:{ko:'강한 눈 소나기',emoji:'❄️'},
+  95:{ko:'뇌우',emoji:'⛈️'},96:{ko:'우박 동반 뇌우',emoji:'⛈️'},99:{ko:'강한 뇌우',emoji:'⛈️'},
+};
+
+const BG_MAP = [
+  [c => c<=1,  'linear-gradient(160deg,#0c1445,#0d47a1,#1565c0)'],
+  [c => c<=3,  'linear-gradient(160deg,#1c2226,#263238,#455a64)'],
+  [c => c<=48, 'linear-gradient(160deg,#1e272c,#37474f,#546e7a)'],
+  [c => c<=67, 'linear-gradient(160deg,#080f1e,#1a237e,#283593)'],
+  [c => c<=77, 'linear-gradient(160deg,#1a1a2e,#2d3561,#3949ab)'],
+  [c => c<=86, 'linear-gradient(160deg,#0a1628,#1a237e,#283593)'],
+  [c => c<=99, 'linear-gradient(160deg,#0a0a14,#12005e,#1a0072)'],
+];
+
+const DAYS_KO   = ['일','월','화','수','목','금','토'];
+const DAYS_FULL = ['일요일','월요일','화요일','수요일','목요일','금요일','토요일'];
+
+function getWmo(code) {
+  if (WMO_MAP[code]) return WMO_MAP[code];
+  const keys = Object.keys(WMO_MAP).map(Number).sort((a,b)=>a-b);
+  for (let i = keys.length-1; i >= 0; i--) {
+    if (keys[i] <= code) return WMO_MAP[keys[i]];
+  }
+  return {ko:'알 수 없음', emoji:'🌡️'};
+}
+
+function getBg(code) {
+  for (const [test, bg] of BG_MAP) if (test(code)) return bg;
+  return BG_MAP[0][1];
+}
+
+function tempColor(t) {
+  if (t >= 35) return '#f44336';
+  if (t >= 28) return '#ff7043';
+  if (t >= 20) return '#ffb300';
+  if (t >= 10) return '#66bb6a';
+  if (t >= 0)  return '#42a5f5';
+  return '#9575cd';
+}
+
+function windDir(deg) {
+  const d = ['북','북북동','북동','동북동','동','동남동','남동','남남동','남','남남서','남서','서남서','서','서북서','북서','북북서'];
+  return d[Math.round((deg % 360) / 22.5) % 16];
+}
+
+function fmt2(n) { return String(n).padStart(2,'0'); }
+
+function pm10Grade(v) {
+  if (v <= 30)  return {label:'좋음',    color:'#4caf50'};
+  if (v <= 80)  return {label:'보통',    color:'#ffb300'};
+  if (v <= 150) return {label:'나쁨',    color:'#ff7043'};
+  return              {label:'매우나쁨', color:'#e53935'};
+}
+function pm25Grade(v) {
+  if (v <= 15)  return {label:'좋음',    color:'#4caf50'};
+  if (v <= 35)  return {label:'보통',    color:'#ffb300'};
+  if (v <= 75)  return {label:'나쁨',    color:'#ff7043'};
+  return              {label:'매우나쁨', color:'#e53935'};
+}
+
+function formatDayLabel(dateStr, idx) {
+  if (idx === 0) return '오늘';
+  if (idx === 1) return '내일';
+  if (idx === 2) return '모레';
+  const d = new Date(dateStr + 'T00:00:00');
+  return DAYS_KO[d.getDay()] + '요일';
+}
+
+// ─── API ─────────────────────────────────────────────────────────
+async function geocode(q) {
+  const isKorean = /[가-힣ᄀ-ᇿ㄰-㆏]/.test(q);
+
+  if (isKorean) {
+    // 한글 검색 → Nominatim(OSM)으로 대한민국만 조회 → 정확한 한국어 지명 보장
+    try {
+      const url = `https://nominatim.openstreetmap.org/search` +
+        `?q=${encodeURIComponent(q)}&format=jsonv2&countrycodes=kr` +
+        `&limit=8&accept-language=ko&addressdetails=1`;
+      const r    = await fetch(url);
+      const data = await r.json();
+      if (data.length > 0) {
+        // 중복 지명 제거 후 변환
+        const seen = new Set();
+        return data
+          .filter(item => {
+            const key = (item.name || item.display_name.split(',')[0]).trim();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          })
+          .map(item => {
+            const addr   = item.address || {};
+            const parts  = item.display_name.split(',').map(s => s.trim());
+            const admin1 = addr.province || addr.state ||
+                           addr.city    || addr.county || parts[1] || '';
+            return {
+              name:         item.name || parts[0],
+              admin1,
+              country:      '대한민국',
+              country_code: 'KR',
+              latitude:     parseFloat(item.lat),
+              longitude:    parseFloat(item.lon),
+              population:   0,
+            };
+          });
+      }
+    } catch (e) {
+      console.warn('Nominatim 실패, Open-Meteo로 대체:', e);
+    }
+  }
+
+  // 영문 검색 또는 한글 fallback → Open-Meteo (북한 KP 완전 제외, 한국 KR 우선)
+  const r = await fetch(
+    `${GEOCODING}?name=${encodeURIComponent(q)}&count=15&language=ko&format=json`
+  );
+  const d = await r.json();
+  return (d.results || [])
+    .filter(item => item.country_code !== 'KP')
+    .sort((a, b) => {
+      const diff = (a.country_code === 'KR' ? 0 : 1) - (b.country_code === 'KR' ? 0 : 1);
+      return diff || (b.population || 0) - (a.population || 0);
+    });
+}
+
+async function fetchModel(lat, lon, modelId) {
+  const p = new URLSearchParams({
+    latitude: lat, longitude: lon,
+    hourly: 'temperature_2m,apparent_temperature,precipitation_probability,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m',
+    daily:  'weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,precipitation_probability_max,sunrise,sunset,uv_index_max',
+    current:'temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,cloud_cover,pressure_msl',
+    timezone: 'Asia/Seoul',
+    forecast_days: 7,
+  });
+  if (modelId) p.set('models', modelId);
+  const r = await fetch(`${WEATHER}?${p}`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+async function fetchAll(lat, lon) {
+  return Promise.allSettled(MODELS.map(m => fetchModel(lat, lon, m.id)))
+    .then(res => res.map((r, i) => ({
+      model: MODELS[i],
+      data:  r.status === 'fulfilled' ? r.value : null,
+      ok:    r.status === 'fulfilled',
+    })));
+}
+
+async function fetchAirQuality(lat, lon) {
+  const p = new URLSearchParams({
+    latitude: lat, longitude: lon,
+    current: 'pm10,pm2_5',
+    timezone: 'Asia/Seoul',
+  });
+  const r = await fetch(`${AIR_QUALITY}?${p}`);
+  if (!r.ok) throw new Error(`AQ HTTP ${r.status}`);
+  return r.json();
+}
+
+// ─── STATE ───────────────────────────────────────────────────────
+let primaryData = null;
+let allResults  = [];
+let aqData      = null;
+let activeDay   = -1;
+let currentLoc  = '서울, 대한민국';
+
+// ─── RENDER ──────────────────────────────────────────────────────
+function renderTodayHourly(data) {
+  const h       = data.hourly;
+  const track   = document.getElementById('todayHTrack');
+  const curHour = new Date().getHours();
+  let   nowEl   = null;
+
+  track.innerHTML = '';
+
+  for (let i = 0; i < 24 && i < h.time.length; i++) {
+    const hour  = parseInt(h.time[i].substring(11, 13), 10);
+    const wmo   = getWmo(h.weather_code[i]);
+    const temp  = Math.round(h.temperature_2m[i]);
+    const appar = Math.round(h.apparent_temperature?.[i] ?? temp);
+    const rain  = h.precipitation_probability?.[i] ?? 0;
+    const wind  = Math.round(h.wind_speed_10m[i]);
+    const isCur = hour === curHour;
+    const isPast = hour < curHour;
+
+    const item = document.createElement('div');
+    item.className = `h-item${isCur ? ' now' : ''}${isPast ? ' h-past' : ''}`;
+    item.innerHTML = `
+      <div class="h-time" style="${isCur ? 'color:var(--accent);font-weight:700' : ''}">${isCur ? '지금' : h.time[i].substring(11,16)}</div>
+      <span class="h-emoji">${wmo.emoji}</span>
+      <div class="h-temp" style="color:${tempColor(temp)};${isCur?'font-size:1.05rem':''}">${temp}°</div>
+      <div class="h-rain" style="min-height:14px">${rain > 0 ? `💧${rain}%` : ''}</div>
+      <div class="h-wind" style="color:var(--text-dim)">💨${wind}</div>
+    `;
+    if (isCur) nowEl = item;
+    track.appendChild(item);
+  }
+
+  // 현재 시각이 화면 중앙에 오도록 스크롤
+  if (nowEl) {
+    setTimeout(() => {
+      const scroller = document.getElementById('todayHScroll');
+      const offset   = nowEl.offsetLeft - scroller.clientWidth / 2 + nowEl.offsetWidth / 2;
+      scroller.scrollLeft = Math.max(0, offset);
+    }, 400);
+  }
+}
+
+function renderCurrent(data) {
+  const c   = data.current;
+  const wmo = getWmo(c.weather_code);
+  document.body.style.background = getBg(c.weather_code);
+
+  document.getElementById('locName').textContent = currentLoc;
+
+  const now = new Date();
+  document.getElementById('locDate').textContent =
+    `${now.getFullYear()}년 ${now.getMonth()+1}월 ${now.getDate()}일 ${DAYS_FULL[now.getDay()]} · ${fmt2(now.getHours())}:${fmt2(now.getMinutes())}`;
+
+  document.getElementById('wEmoji').textContent  = wmo.emoji;
+  document.getElementById('mainTemp').textContent = `${Math.round(c.temperature_2m)}°`;
+  document.getElementById('wDesc').textContent    = wmo.ko;
+  document.getElementById('wFeels').textContent   = `체감온도 ${Math.round(c.apparent_temperature)}°C`;
+
+  document.getElementById('wStats').innerHTML = `
+    <div class="stat"><span class="stat-icon">💧</span><div><div class="stat-val">${c.relative_humidity_2m}%</div><div class="stat-lbl">습도</div></div></div>
+    <div class="stat"><span class="stat-icon">💨</span><div><div class="stat-val">${Math.round(c.wind_speed_10m)} km/h</div><div class="stat-lbl">풍속 (${windDir(c.wind_direction_10m ?? 0)})</div></div></div>
+    <div class="stat"><span class="stat-icon">☁️</span><div><div class="stat-val">${c.cloud_cover ?? '-'}%</div><div class="stat-lbl">구름량</div></div></div>
+    <div class="stat"><span class="stat-icon">🌊</span><div><div class="stat-val">${c.pressure_msl ? Math.round(c.pressure_msl)+' hPa' : '-'}</div><div class="stat-lbl">기압</div></div></div>
+  `;
+}
+
+function renderToday(data) {
+  const d = data.daily;
+  const h = data.hourly;
+  const maxPrecip = Math.max(...(h.precipitation_probability?.slice(0,24) ?? [0]));
+  const uv = d.uv_index_max?.[0];
+
+  const pm10 = aqData?.current?.pm10;
+  const pm25 = aqData?.current?.pm2_5;
+  const g10  = pm10 != null ? pm10Grade(pm10) : null;
+  const g25  = pm25 != null ? pm25Grade(pm25) : null;
+
+  const pm10Html = g10
+    ? `<div class="t-val" style="font-size:1rem;color:${g10.color}">${Math.round(pm10)}<small style="font-size:0.6rem;font-weight:400"> µg/m³</small></div>
+       <div class="aq-grade" style="background:${g10.color}22;color:${g10.color}">${g10.label}</div>`
+    : `<div class="t-val">-</div>`;
+  const pm25Html = g25
+    ? `<div class="t-val" style="font-size:1rem;color:${g25.color}">${Math.round(pm25)}<small style="font-size:0.6rem;font-weight:400"> µg/m³</small></div>
+       <div class="aq-grade" style="background:${g25.color}22;color:${g25.color}">${g25.label}</div>`
+    : `<div class="t-val">-</div>`;
+
+  document.getElementById('todayGrid').innerHTML = `
+    <div class="t-stat"><div class="t-val" style="color:#ff7043">${Math.round(d.temperature_2m_max[0])}°</div><div class="t-lbl">최고 기온</div></div>
+    <div class="t-stat"><div class="t-val" style="color:#64b5f6">${Math.round(d.temperature_2m_min[0])}°</div><div class="t-lbl">최저 기온</div></div>
+    <div class="t-stat"><div class="t-val" style="color:#64b5f6">${maxPrecip}%</div><div class="t-lbl">최대 강수 확률</div></div>
+    <div class="t-stat"><div class="t-val" style="color:#ffb300">${uv != null ? uv.toFixed(1) : '-'}</div><div class="t-lbl">UV 지수</div></div>
+    <div class="t-stat"><div class="t-val" style="font-size:1rem">${d.precipitation_sum[0].toFixed(1)} mm</div><div class="t-lbl">강수량</div></div>
+    <div class="t-stat"><div class="t-val" style="font-size:0.95rem">🌅 ${d.sunrise[0].substring(11,16)}</div><div class="t-lbl">일출</div></div>
+    <div class="t-stat">${pm10Html}<div class="t-lbl">미세먼지 PM10</div></div>
+    <div class="t-stat">${pm25Html}<div class="t-lbl">초미세먼지 PM2.5</div></div>
+    <div class="t-stat"><div class="t-val" style="font-size:0.95rem">🌇 ${d.sunset[0].substring(11,16)}</div><div class="t-lbl">일몰</div></div>
+  `;
+}
+
+function renderSources(results) {
+  const el = document.getElementById('sourcesRow');
+  el.innerHTML = '';
+  results.forEach(({model, data, ok}) => {
+    const card = document.createElement('div');
+    card.className = 'card src-card';
+    if (ok && data?.daily) {
+      const max = Math.round(data.daily.temperature_2m_max[0]);
+      const min = Math.round(data.daily.temperature_2m_min[0]);
+      const wmo = getWmo(data.daily.weather_code[0]);
+      card.innerHTML = `
+        <div class="src-flag">${model.flag}</div>
+        <div class="src-name">${model.name}</div>
+        <div class="src-emoji">${wmo.emoji}</div>
+        <div class="src-max" style="color:${tempColor(max)}">${max}°</div>
+        <div class="src-min">${min}°</div>
+        <span class="src-tag" style="background:${model.color}25;color:${model.color}">${model.tag}</span>
+      `;
+    } else {
+      card.innerHTML = `
+        <div class="src-flag">${model.flag}</div>
+        <div class="src-name">${model.name}</div>
+        <div class="src-na">데이터 없음</div>
+      `;
+    }
+    el.appendChild(card);
+  });
+}
+
+function renderWeek(data) {
+  const el = document.getElementById('weekRow');
+  el.innerHTML = '';
+  data.daily.time.forEach((dateStr, i) => {
+    const d    = data.daily;
+    const wmo  = getWmo(d.weather_code[i]);
+    const date = new Date(dateStr + 'T00:00:00');
+    const max  = Math.round(d.temperature_2m_max[i]);
+    const min  = Math.round(d.temperature_2m_min[i]);
+    const rain = d.precipitation_probability_max[i] ?? 0;
+
+    const card = document.createElement('div');
+    card.className = `day-card${i === activeDay ? ' active' : ''}`;
+    card.innerHTML = `
+      <div class="d-name">${formatDayLabel(dateStr, i)}</div>
+      <div class="d-date">${date.getMonth()+1}/${date.getDate()}</div>
+      <span class="d-emoji">${wmo.emoji}</span>
+      <div class="d-temps">
+        <span class="d-max" style="color:${tempColor(max)}">${max}°</span>
+        <span class="d-min">${min}°</span>
+      </div>
+      <div class="d-rain">${rain > 0 ? `🌧 ${rain}%` : ''}</div>
+    `;
+    card.addEventListener('click', () => selectDay(i));
+    el.appendChild(card);
+  });
+}
+
+function selectDay(idx) {
+  const panel = document.getElementById('detailPanel');
+  if (activeDay === idx && panel.classList.contains('open')) {
+    panel.classList.remove('open');
+    activeDay = -1;
+  } else {
+    activeDay = idx;
+    renderDetail(primaryData, idx);
+    panel.classList.add('open');
+    setTimeout(() => panel.scrollIntoView({behavior:'smooth', block:'nearest'}), 100);
+  }
+  document.querySelectorAll('.day-card').forEach((c, i) => c.classList.toggle('active', i === activeDay));
+}
+
+function renderDetail(data, dayIdx) {
+  const dateStr = data.daily.time[dayIdx];
+  const date    = new Date(dateStr + 'T00:00:00');
+  const h       = data.hourly;
+  const start   = dayIdx * 24;
+
+  document.getElementById('detailTitle').textContent =
+    `📊 ${date.getMonth()+1}월 ${date.getDate()}일 (${DAYS_FULL[date.getDay()]}) 시간대별 예보`;
+
+  // Hourly cards
+  const track = document.getElementById('hourlyTrack');
+  track.innerHTML = '';
+  for (let i = start; i < start + 24 && i < h.time.length; i++) {
+    const wmo  = getWmo(h.weather_code[i]);
+    const temp = Math.round(h.temperature_2m[i]);
+    const rain = h.precipitation_probability?.[i] ?? 0;
+    const wind = Math.round(h.wind_speed_10m[i]);
+    const item = document.createElement('div');
+    item.className = 'h-item';
+    item.innerHTML = `
+      <div class="h-time">${h.time[i].substring(11,16)}</div>
+      <span class="h-emoji">${wmo.emoji}</span>
+      <div class="h-temp" style="color:${tempColor(temp)}">${temp}°</div>
+      <div class="h-rain">${rain > 0 ? `💧${rain}%` : ''}</div>
+      <div class="h-wind">💨${wind}</div>
+    `;
+    track.appendChild(item);
+  }
+
+  // Temp bar chart (every 3h)
+  const barsEl = document.getElementById('tempBars');
+  barsEl.innerHTML = '';
+  const dayTemps = [];
+  for (let i = start; i < start + 24 && i < h.time.length; i++) dayTemps.push(h.temperature_2m[i]);
+  const minT = Math.min(...dayTemps);
+  const maxT = Math.max(...dayTemps);
+  const range = maxT - minT || 1;
+
+  for (let i = 0; i < 24 && (start+i) < h.time.length; i += 3) {
+    const idx  = start + i;
+    const temp = Math.round(h.temperature_2m[idx]);
+    const pct  = ((temp - minT) / range * 75 + 10).toFixed(1);
+    const row  = document.createElement('div');
+    row.className = 'bar-row';
+    row.innerHTML = `
+      <span class="bar-lbl">${h.time[idx].substring(11,16)}</span>
+      <div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${tempColor(temp)}"></div></div>
+      <span class="bar-val" style="color:${tempColor(temp)}">${temp}°</span>
+    `;
+    barsEl.appendChild(row);
+  }
+}
+
+// ─── LOAD ─────────────────────────────────────────────────────────
+async function loadWeather(lat, lon, locName) {
+  currentLoc = locName;
+  const content = document.getElementById('weatherContent');
+  const loading = document.getElementById('loadingDiv');
+  const errBox  = document.getElementById('errorBox');
+
+  content.style.display = 'none';
+  loading.classList.add('show');
+  errBox.classList.remove('show');
+  document.getElementById('detailPanel').classList.remove('open');
+  activeDay = -1;
+
+  try {
+    const [modelResults, aqResult] = await Promise.all([
+      fetchAll(lat, lon),
+      fetchAirQuality(lat, lon).catch(() => null),
+    ]);
+    allResults  = modelResults;
+    aqData      = aqResult;
+
+    const first = allResults.find(r => r.ok && r.data);
+    if (!first) throw new Error('날씨 데이터를 불러올 수 없습니다.');
+    primaryData = first.data;
+
+    renderCurrent(primaryData);
+    renderToday(primaryData);
+    renderTodayHourly(primaryData);
+    renderSources(allResults);
+    renderWeek(primaryData);
+
+    loading.classList.remove('show');
+    content.style.display = 'block';
+  } catch (e) {
+    loading.classList.remove('show');
+    errBox.classList.add('show');
+    errBox.textContent = `⚠️ 오류: ${e.message}`;
+  }
+}
+
+// ─── SEARCH ───────────────────────────────────────────────────────
+let debounce = null;
+const inp = document.getElementById('searchInput');
+const res = document.getElementById('searchResults');
+
+function countryBadge(cc, country) {
+  const isKR  = cc === 'KR';
+  const color = isKR ? '#1565c0' : '#37474f';
+  const label = isKR ? '🇰🇷 대한민국' : (country || cc || '');
+  return `<span style="font-size:0.65rem;padding:2px 7px;border-radius:20px;background:${color}33;color:${color};font-weight:600;white-space:nowrap">${label}</span>`;
+}
+
+function showDropdown(items) {
+  if (!items.length) {
+    res.innerHTML = '<div class="s-item"><div class="s-city">검색 결과가 없습니다</div></div>';
+  } else {
+    // 드롭다운 표시는 최대 6개로 제한
+    const display = items.slice(0, 6);
+    res.innerHTML = display.map((r, i) => `
+      <div class="s-item" data-i="${i}">
+        <span style="font-size:1.3rem">📍</span>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <span class="s-city">${r.name}${r.admin1 ? ', '+r.admin1 : ''}</span>
+            ${countryBadge(r.country_code, r.country)}
+          </div>
+          <div class="s-country">${r.latitude.toFixed(2)}°N ${r.longitude.toFixed(2)}°E</div>
+        </div>
+      </div>
+    `).join('');
+    res.querySelectorAll('.s-item').forEach((el, i) => {
+      el.addEventListener('click', () => {
+        const r = items[i];
+        const name = `${r.name}${r.admin1 ? ', '+r.admin1 : ''}, ${r.country}`;
+        inp.value = '';
+        res.classList.remove('show');
+        loadWeather(r.latitude, r.longitude, name);
+      });
+    });
+  }
+  res.classList.add('show');
+}
+
+inp.addEventListener('input', () => {
+  clearTimeout(debounce);
+  const q = inp.value.trim();
+  if (!q) { res.classList.remove('show'); return; }
+  debounce = setTimeout(async () => {
+    try { showDropdown(await geocode(q)); } catch(e) {}
+  }, 300);
+});
+
+inp.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('searchBtn').click(); });
+
+document.getElementById('searchBtn').addEventListener('click', async () => {
+  const q = inp.value.trim();
+  if (!q) return;
+  clearTimeout(debounce);
+  try {
+    const items = await geocode(q);
+    if (items.length) {
+      const r = items[0];
+      inp.value = '';
+      res.classList.remove('show');
+      loadWeather(r.latitude, r.longitude, `${r.name}${r.admin1?', '+r.admin1:''}, ${r.country}`);
+    } else {
+      showDropdown([]);
+    }
+  } catch(e) {}
+});
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-wrap')) res.classList.remove('show');
+});
+
+// ─── INIT ─────────────────────────────────────────────────────────
+loadWeather(37.5665, 126.9780, '서울, 대한민국');
+</script>
+</body>
+</html>
