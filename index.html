@@ -467,25 +467,47 @@ function formatDayLabel(dateStr, idx) {
 }
 
 // ─── API ─────────────────────────────────────────────────────────
-// Nominatim 결과를 공통 포맷으로 변환 (학교·건물 등 제외하고 행정구역/지역만)
+// Nominatim 결과 → 공통 포맷 변환
+// 화이트리스트: 행정구역·지역 타입만 허용 → 학교·병원·도로는 애초에 통과 불가
 function parseNominatim(data, defaultCountry, defaultCC) {
+  // 허용할 place 타입 (도시·읍·면·군·구 등 지리적 행정 단위)
+  const PLACE_OK = new Set([
+    'city','town','village','hamlet','suburb','quarter',
+    'county','district','municipality','borough',
+    'state','province','region','neighbourhood','locality',
+    'administrative'
+  ]);
+
   const seen = new Set();
   return data
-    .filter(item => item.class === 'boundary' || item.class === 'place')
+    .filter(item =>
+      // 행정 경계선이거나
+      (item.class === 'boundary' && item.type === 'administrative') ||
+      // 지리적 장소 타입인 경우만 통과
+      (item.class === 'place'    && PLACE_OK.has(item.type))
+    )
+    .sort((a, b) => (b.importance || 0) - (a.importance || 0))
     .filter(item => {
-      const key = (item.name || item.display_name.split(',')[0]).trim();
+      const nd  = item.namedetails || {};
+      const key = (nd['name:ko'] || item.name ||
+                   item.display_name.split(',')[0]).trim();
       if (!key || seen.has(key)) return false;
       seen.add(key);
       return true;
     })
     .map(item => {
-      const addr  = item.address || {};
+      const addr  = item.address     || {};
+      const nd    = item.namedetails || {};
       const parts = item.display_name.split(',').map(s => s.trim());
       const cc    = (addr.country_code || defaultCC || '').toUpperCase();
+      // OSM name:ko 태그 → 정확한 한국어 지명 (홍천군, 강릉시…)
+      const name  = nd['name:ko'] || item.name || parts[0];
       return {
-        name:         item.name || parts[0],
-        admin1:       addr.province || addr.state || addr.city || addr.county || parts[1] || '',
-        country:      addr.country  || defaultCountry || parts[parts.length - 1] || '',
+        name,
+        admin1:       addr.province || addr.state  || addr.city ||
+                      addr.county   || parts[1]    || '',
+        country:      addr.country  || defaultCountry ||
+                      parts[parts.length - 1]      || '',
         country_code: cc,
         latitude:     parseFloat(item.lat),
         longitude:    parseFloat(item.lon),
@@ -496,10 +518,12 @@ function parseNominatim(data, defaultCountry, defaultCC) {
 
 async function nominatimSearch(q, countrycodes) {
   const cc  = countrycodes ? `&countrycodes=${countrycodes}` : '';
+  // namedetails=1 → OSM name:ko 태그 포함 반환
   const url = `https://nominatim.openstreetmap.org/search` +
               `?q=${encodeURIComponent(q)}&format=jsonv2${cc}` +
-              `&limit=12&accept-language=ko&addressdetails=1`;
+              `&limit=12&accept-language=ko&addressdetails=1&namedetails=1`;
   const r   = await fetch(url);
+  if (!r.ok) throw new Error(`Nominatim ${r.status}`);
   return r.json();
 }
 
@@ -522,9 +546,9 @@ async function geocode(q) {
     } catch (e) { console.warn('Nominatim 전세계 실패:', e); }
   }
 
-  // 영문 검색 또는 최종 fallback → Open-Meteo (북한 제외, 한국 우선)
+  // 최종 fallback → Open-Meteo (language 제거로 오역 방지, 북한 제외, 한국 우선)
   const r = await fetch(
-    `${GEOCODING}?name=${encodeURIComponent(q)}&count=15&language=ko&format=json`
+    `${GEOCODING}?name=${encodeURIComponent(q)}&count=15&format=json`
   );
   const d = await r.json();
   return (d.results || [])
@@ -532,6 +556,12 @@ async function geocode(q) {
     .sort((a, b) => {
       const diff = (a.country_code === 'KR' ? 0 : 1) - (b.country_code === 'KR' ? 0 : 1);
       return diff || (b.population || 0) - (a.population || 0);
+    })
+    .map(item => {
+      // 한글 검색어인데 반환된 이름이 영문이면 검색어 자체를 표시명으로 사용
+      const nameIsEnglish = /^[A-Za-z\s\-]+$/.test(item.name || '');
+      if (isKorean && nameIsEnglish) item.name = q;
+      return item;
     });
 }
 
