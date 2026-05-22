@@ -1,4 +1,5 @@
 
+
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -469,22 +470,34 @@ function formatDayLabel(dateStr, idx) {
 
 // ─── API ─────────────────────────────────────────────────────────
 // Nominatim 결과 → 공통 포맷 변환
-// 화이트리스트: 행정구역·지역 타입만 허용 → 학교·병원·도로는 애초에 통과 불가
 function parseNominatim(data, defaultCountry, defaultCC) {
-  // 허용할 place 타입 (도시·읍·면·군·구 등 지리적 행정 단위)
   const PLACE_OK = new Set([
     'city','town','village','hamlet','suburb','quarter',
     'county','district','municipality','borough',
     'state','province','region','neighbourhood','locality',
-    'administrative'
+    'administrative','island','islet','isolated_dwelling',
+    'allotments','farm',
   ]);
+
+  // 행정구역명 정제: "시", "구", "군" 등의 suffix를 보존하면서 상위 행정구역 추출
+  function extractAdmin1(addr, parts) {
+    const candidates = [
+      addr['city'],       // 서울특별시, 대구광역시 등
+      addr['county'],     // 군·구 수준
+      addr['province'],   // 도 수준
+      addr['state'],
+      parts[1],
+    ];
+    for (const c of candidates) {
+      if (c && c.trim()) return c.trim();
+    }
+    return '';
+  }
 
   const seen = new Set();
   return data
     .filter(item =>
-      // 행정 경계선이거나
       (item.class === 'boundary' && item.type === 'administrative') ||
-      // 지리적 장소 타입인 경우만 통과
       (item.class === 'place'    && PLACE_OK.has(item.type))
     )
     .sort((a, b) => (b.importance || 0) - (a.importance || 0))
@@ -501,12 +514,10 @@ function parseNominatim(data, defaultCountry, defaultCC) {
       const nd    = item.namedetails || {};
       const parts = item.display_name.split(',').map(s => s.trim());
       const cc    = (addr.country_code || defaultCC || '').toUpperCase();
-      // OSM name:ko 태그 → 정확한 한국어 지명 (홍천군, 강릉시…)
-      const name  = nd['name:ko'] || item.name || parts[0];
+      const name  = nd['name:ko'] || nd['name'] || item.name || parts[0];
       return {
         name,
-        admin1:       addr.province || addr.state  || addr.city ||
-                      addr.county   || parts[1]    || '',
+        admin1:       extractAdmin1(addr, parts),
         country:      addr.country  || defaultCountry ||
                       parts[parts.length - 1]      || '',
         country_code: cc,
@@ -519,27 +530,50 @@ function parseNominatim(data, defaultCountry, defaultCC) {
 
 async function nominatimSearch(q, countrycodes) {
   const cc  = countrycodes ? `&countrycodes=${countrycodes}` : '';
-  // namedetails=1 → OSM name:ko 태그 포함 반환
+  // format=json 사용 (jsonv2는 class→category로 변경되어 필터 오작동)
   const url = `https://nominatim.openstreetmap.org/search` +
-              `?q=${encodeURIComponent(q)}&format=jsonv2${cc}` +
-              `&limit=12&accept-language=ko&addressdetails=1&namedetails=1`;
-  const r   = await fetch(url);
+              `?q=${encodeURIComponent(q)}&format=json${cc}` +
+              `&limit=15&accept-language=ko&addressdetails=1&namedetails=1`;
+  const r   = await fetch(url, { headers: { 'Accept-Language': 'ko' } });
   if (!r.ok) throw new Error(`Nominatim ${r.status}`);
   return r.json();
 }
+
+// 통합·개편된 한국 행정구역 별칭 (구 지명 → 검색 보조어)
+const KR_ALIASES = {
+  '마산': '마산 창원',
+  '진해': '진해 창원',
+  '삼천포': '사천',
+  '온양': '아산',
+  '이리': '익산',
+  '금산': '금산 충남',
+  '서귀': '서귀포',
+};
 
 async function geocode(q) {
   const isKorean = /[가-힣ᄀ-ᇿ㄰-㆏]/.test(q);
 
   if (isKorean) {
-    // 1차: 대한민국 행정구역·지역 검색
+    // 별칭 처리 (통합 전 옛 지명 등)
+    const searchQ = KR_ALIASES[q] || q;
+
+    // 1차: 대한민국 한정 검색
     try {
-      const data    = await nominatimSearch(q, 'kr');
+      const data    = await nominatimSearch(searchQ, 'kr');
       const results = parseNominatim(data, '대한민국', 'KR');
       if (results.length > 0) return results;
     } catch (e) { console.warn('Nominatim KR 실패:', e); }
 
-    // 2차: 한국어로 쓴 외국 지명 검색 (뉴욕, 도쿄 등) — 북한 제외
+    // 2차: 결과 없으면 "시/구" suffix 추가 재시도
+    if (searchQ === q && !q.match(/[시구군읍면동리]$/)) {
+      try {
+        const data    = await nominatimSearch(q + '시', 'kr');
+        const results = parseNominatim(data, '대한민국', 'KR');
+        if (results.length > 0) return results;
+      } catch (e) {}
+    }
+
+    // 3차: 한국어로 쓴 외국 지명 (뉴욕, 도쿄 등) — 북한 제외
     try {
       const data    = await nominatimSearch(q, '');
       const results = parseNominatim(data).filter(r => r.country_code !== 'KP');
@@ -547,7 +581,7 @@ async function geocode(q) {
     } catch (e) { console.warn('Nominatim 전세계 실패:', e); }
   }
 
-  // 최종 fallback → Open-Meteo (language 제거로 오역 방지, 북한 제외, 한국 우선)
+  // 최종 fallback → Open-Meteo GeoNames (북한 제외, 한국 우선)
   const r = await fetch(
     `${GEOCODING}?name=${encodeURIComponent(q)}&count=15&format=json`
   );
@@ -559,7 +593,6 @@ async function geocode(q) {
       return diff || (b.population || 0) - (a.population || 0);
     })
     .map(item => {
-      // 한글 검색어인데 반환된 이름이 영문이면 검색어 자체를 표시명으로 사용
       const nameIsEnglish = /^[A-Za-z\s\-]+$/.test(item.name || '');
       if (isKorean && nameIsEnglish) item.name = q;
       return item;
